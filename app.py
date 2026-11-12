@@ -844,4 +844,48 @@ elif page == "Understanding Parameters":
         "Resting ECG": "ECG measurement at rest.",
         "Maximum Heart Rate": "Maximum heart rate recorded during the test.",
         "Exercise-Induced Angina": "0 = No; 1 = Yes.",
-        "Oldpeak": "ST-segment depression va
+        "Oldpeak": "ST-segment depression value during excercise.",
+        "Slope": "Peak exercise ST segment slope.",
+        "Major Vessels": "Number of major vessels recorded."
+    }
+
+    for title, description in parameters.items():
+
+        with st.expander(title):
+            st.write(description)
+
+
+# ---------------- HEART HEALTH TIPS ----------------
+
+elif page == "Heart Health Tips":
+
+    st.markdown(
+        '<p class="main-title">Heart Health Tips ❤️</p>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown("""
+    - Eat a balanced diet.
+    - Stay physically active.
+    - Avoid smoking.
+    - Get enough sleep.
+    - Monitor your health.
+    - Manage stress.
+    """)
+
+    st.warning(
+        "For chest pain, severe breathlessness or fainting, "
+        "seek urgent medical care."
+    )
+
+
+# ---------------- FOOTER ----------------
+
+st.divider()
+
+st.caption(
+    "HeartCare AI "
+    "Machine-learning predictions are not medical diagnoses."
+)
+
+
