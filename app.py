@@ -1,401 +1,847 @@
+
 import streamlit as st
 import pandas as pd
 import joblib
 from pathlib import Path
+from supabase import create_client
 
-# ---------------------------------------------------------
-# HEARTCARE AI - PUBLIC DEMONSTRATION
-# No patient records are saved or stored by this application.
-# ---------------------------------------------------------
+# ---------------- CONFIGURATION ----------------
 
 st.set_page_config(
-    page_title="HeartCare AI | Heart Health Prediction",
+    page_title="HeartCare AI",
     page_icon="❤️",
-    layout="wide",
+    layout="wide"
 )
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "heartcare_rf_pipeline.joblib"
 
 FEATURES = [
-    "age", "gender", "chestpain", "restingBP", "serumcholestrol",
-    "fastingbloodsugar", "restingrelectro", "maxheartrate",
-    "exerciseangia", "oldpeak", "slope", "noofmajorvessels"
+    "age", "gender", "chestpain", "restingBP",
+    "serumcholestrol", "fastingbloodsugar",
+    "restingrelectro", "maxheartrate",
+    "exerciseangia", "oldpeak", "slope",
+    "noofmajorvessels"
 ]
+
+# ---------------- LOAD MODEL ----------------
 
 @st.cache_resource
 def load_model():
-    if not MODEL_PATH.is_file():
+    if not MODEL_PATH.exists():
         raise FileNotFoundError(
-            "The model file 'heartcare_rf_pipeline.joblib' was not found. "
-            "Make sure it is uploaded to the same GitHub repository folder as app.py."
+            "heartcare_rf_pipeline.joblib not found."
         )
     return joblib.load(MODEL_PATH)
 
+
 try:
     model = load_model()
-except Exception as exc:
-    st.error(f"Unable to load the prediction model: {exc}")
+except Exception as e:
+    st.error(f"Model loading failed: {e}")
     st.stop()
 
-# ---------------- STYLE ----------------
+
+# ---------------- SUPABASE CONNECTION ----------------
+
+@st.cache_resource
+def get_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+
+try:
+    supabase = get_supabase()
+except Exception as e:
+    st.error(f"Supabase connection failed: {e}")
+    st.stop()
+
+
+# Restore administrator session
+if (
+    st.session_state.get("access_token")
+    and st.session_state.get("refresh_token")
+):
+    try:
+        supabase.auth.set_session(
+            st.session_state["access_token"],
+            st.session_state["refresh_token"]
+        )
+    except Exception:
+        for key in ["access_token", "refresh_token", "admin_id"]:
+            st.session_state.pop(key, None)
+
+
+# ---------------- STYLING ----------------
+
 st.markdown("""
 <style>
-.stApp {background: #f5f8fc;}
-[data-testid="stSidebar"] {background: #102a43;}
-[data-testid="stSidebar"] * {color: white !important;}
+.stApp {
+    background: #f5f8fc;
+}
+[data-testid="stSidebar"] {
+    background: #102a43;
+}
+[data-testid="stSidebar"] * {
+    color: white !important;
+}
 .hero {
-    background: linear-gradient(120deg, #12304a, #176b87);
-    padding: 30px; border-radius: 18px; color: white; margin-bottom: 22px;
+    background: linear-gradient(120deg,#12304a,#176b87);
+    padding: 30px;
+    border-radius: 18px;
+    color: white;
 }
-.hero h1 {color: white; font-size: 36px;}
-.hero p {color: #e5f3fa; font-size: 17px;}
-.main-title {font-size: 34px; font-weight: 800; color: #12304a;}
-.subtitle {font-size: 16px; color: #64748b;}
-.result-card {
-    background: white; border-radius: 16px; padding: 24px;
-    border: 1px solid #e3edf5; text-align: center;
+.hero h1 {
+    color: white;
 }
-div.stButton > button, div.stFormSubmitButton > button {
-    background: #087e8b; color: white; border-radius: 9px;
-    border: 0; font-weight: 600;
+.main-title {
+    font-size: 32px;
+    font-weight: bold;
+    color: #12304a;
 }
-.footer {text-align: center; color: #718096; padding: 22px; font-size: 13px;}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- HELPERS ----------------
+
+# ---------------- MODEL FUNCTIONS ----------------
+
 def predict_patient(values):
-    input_df = pd.DataFrame([values], columns=FEATURES)
+
+    input_df = pd.DataFrame(
+        [values],
+        columns=FEATURES
+    )
+
     prediction = int(model.predict(input_df)[0])
 
     probability = None
+
     if hasattr(model, "predict_proba"):
         probabilities = model.predict_proba(input_df)[0]
         classes = list(model.classes_)
+
         if prediction in classes:
-            probability = float(probabilities[classes.index(prediction)] * 100)
+            probability = float(
+                probabilities[classes.index(prediction)] * 100
+            )
 
     return prediction, probability, input_df
 
 
+def get_prediction_label(prediction):
+
+    if prediction == 1:
+        return "Heart Disease"
+
+    elif prediction == 0:
+        return "No Heart Disease"
+
+    return f"Model class {prediction}"
+
+
 def show_prediction(prediction, probability, input_df):
+
     st.divider()
-    st.markdown("## Prediction Result")
+    st.subheader("Prediction Result")
 
     if prediction == 1:
         st.error("❤️ Model Prediction: Heart Disease")
+
     elif prediction == 0:
         st.success("💚 Model Prediction: No Heart Disease")
-    else:
-        st.warning(f"Model returned class: {prediction}")
 
     if probability is not None:
-        st.markdown(
-            f"""
-            <div class="result-card">
-              <h3>Probability for the predicted class</h3>
-              <h1 style="color:#087e8b;font-size:44px">{probability:.2f}%</h1>
-              <p>This is the model's predicted-class probability, not a clinical risk score.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.progress(min(max(probability / 100, 0.0), 1.0))
 
-    st.markdown("### Demonstration input summary")
-    st.dataframe(input_df, use_container_width=True, hide_index=True)
+        st.metric(
+            "Predicted-class probability",
+            f"{probability:.2f}%"
+        )
+
+        st.progress(
+            min(max(probability / 100, 0), 1)
+        )
+
+    st.write("Input Summary")
+    st.dataframe(input_df, use_container_width=True)
+
     st.warning(
-        "This is an academic demonstration only, not a medical diagnosis. "
-        "Do not use this result to make healthcare decisions. Consult a qualified "
-        "healthcare professional for medical advice."
+        "This is an academic machine-learning prediction, "
+        "not a medical diagnosis. Consult a qualified healthcare "
+        "professional for medical advice."
     )
 
 
-# ---------------- SIDEBAR ----------------
-st.sidebar.markdown("# ❤️ HeartCare AI")
-st.sidebar.caption("Heart Health Prediction Demonstration")
-st.sidebar.divider()
-if "selected_page" not in st.session_state:
-    st.session_state.selected_page = "Home"
+# ---------------- INPUT FORM ----------------
 
-page = st.sidebar.radio(
-    "Navigation",
-    ["Home", "Predictor", "Understanding Health Parameters", "Heart Health Tips"],
-    key="selected_page",
-)
-st.sidebar.divider()
-st.sidebar.info(
-    "Demo mode: predictions are processed for the current session only. "
-    "This app does not save patient records."
-)
+def health_input_form(form_name, button_text):
 
-# ---------------- HOME ----------------
-if page == "Home":
-    st.markdown(
-        """
-        <div class="hero">
-          <h1>❤️ HeartCare AI</h1>
-          <p>Heart Disease Risk Prediction Demonstration</p>
-          <p>A machine-learning academic project that demonstrates predictions
-          from selected heart-health parameters.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with st.form(form_name):
 
-    st.markdown("## Welcome to HeartCare AI")
-    left, right = st.columns([1.5, 1])
-    with left:
-        st.markdown(
-            """
-            ### About this project
-            HeartCare AI uses a trained Random Forest machine-learning pipeline
-            to demonstrate how selected health-related input values are processed
-            by a classification model.
+        st.subheader("Basic Parameters")
 
-            **The demonstration includes:**
-            - Patient parameter input form
-            - Heart disease classification output
-            - Predicted-class probability, when supported by the model
-            - Explanations of the input parameters
-            """
-        )
-        if st.button("Start Heart Disease Prediction", use_container_width=True):
-            st.session_state.selected_page = "Predictor"
-            st.rerun()
-    with right:
-        st.image(
-            "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=900",
-            caption="Healthcare professional",
-            use_container_width=True,
-        )
-
-    st.info(
-        "Use fictional/sample values only. Do not enter real patient-identifying "
-        "information or use this demonstration for diagnosis."
-    )
-
-# ---------------- PREDICTOR ----------------
-elif page == "Predictor":
-    st.markdown(
-        '<p class="main-title">❤️ Heart Disease Predictor</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="subtitle">Enter fictional demonstration values for the model inputs.</p>',
-        unsafe_allow_html=True,
-    )
-    st.warning(
-        "Use sample values only. Do not enter a real person's private medical "
-        "information. The application does not save submitted values."
-    )
-
-    with st.form("prediction_form"):
-        st.markdown("### 👤 Basic Parameters")
         c1, c2 = st.columns(2)
+
         with c1:
-            age = st.number_input("Age (years)", min_value=1, max_value=120, value=45)
+            age = st.number_input(
+                "Age",
+                1, 120, 45,
+                key=form_name + "_age"
+            )
+
         with c2:
-            gender_label = st.selectbox("Gender", ["Female (0)", "Male (1)"])
+            gender = st.selectbox(
+                "Gender",
+                ["Female (0)", "Male (1)"],
+                key=form_name + "_gender"
+            )
 
         st.divider()
-        st.markdown("### ❤️ Heart and Test Parameters")
+        st.subheader("Heart and Test Parameters")
+
         c1, c2 = st.columns(2)
 
         with c1:
-            chest_label = st.selectbox(
+
+            chest = st.selectbox(
                 "Chest Pain Type",
                 [
                     "0 (Typical angina)",
                     "1 (Atypical angina)",
-                    "2 (Non-anginal chest pain)",
-                    "3 (Asymptomatic)",
+                    "2 (Non-anginal pain)",
+                    "3 (Asymptomatic)"
                 ],
+                key=form_name + "_chest"
             )
-            resting_bp = st.number_input(
-                "Resting Blood Pressure (mmHg)",
-                min_value=94, max_value=200, value=120,
+
+            bp = st.number_input(
+                "Resting Blood Pressure",
+                94, 200, 120,
+                key=form_name + "_bp"
             )
+
             cholesterol = st.number_input(
-                "Serum Cholesterol (mg/dL)",
-                min_value=126, max_value=602, value=200,
+                "Serum Cholesterol",
+                126, 602, 200,
+                key=form_name + "_chol"
             )
-            fasting_label = st.selectbox(
-                "Fasting Blood Sugar", ["0 (≤120 mg/dL)", "1 (>120 mg/dL)"]
+
+            fasting = st.selectbox(
+                "Fasting Blood Sugar",
+                ["0 (≤120 mg/dL)", "1 (>120 mg/dL)"],
+                key=form_name + "_fasting"
             )
-            ecg_label = st.selectbox(
+
+            ecg = st.selectbox(
                 "Resting ECG",
                 [
                     "0 (Normal ECG)",
-                    "1 (ST-T wave abnormality)",
-                    "2 (Possible/definite LVH)",
+                    "1 (ST-T abnormality)",
+                    "2 (Possible/definite LVH)"
                 ],
+                key=form_name + "_ecg"
             )
 
         with c2:
-            max_heart_rate = st.number_input(
-                "Maximum Heart Rate (bpm)",
-                min_value=71, max_value=202, value=150,
+
+            maxhr = st.number_input(
+                "Maximum Heart Rate",
+                71, 202, 150,
+                key=form_name + "_maxhr"
             )
-            angina_label = st.selectbox(
-                "Exercise-Induced Angina", ["0 (No)", "1 (Yes)"]
+
+            angina = st.selectbox(
+                "Exercise-Induced Angina",
+                ["0 (No)", "1 (Yes)"],
+                key=form_name + "_angina"
             )
+
             oldpeak = st.number_input(
-                "Oldpeak", min_value=0.0, max_value=6.2,
-                value=1.0, step=0.1, format="%.1f",
+                "Oldpeak",
+                0.0, 6.2, 1.0,
+                step=0.1,
+                key=form_name + "_oldpeak"
             )
-            slope_label = st.selectbox(
+
+            slope = st.selectbox(
                 "Slope",
                 [
-                    "0 (Unspecified dataset category)",
+                    "0 (Unspecified)",
                     "1 (Upsloping)",
                     "2 (Flat)",
-                    "3 (Downsloping)",
+                    "3 (Downsloping)"
                 ],
+                key=form_name + "_slope"
             )
-            vessels_label = st.selectbox(
+
+            vessels = st.selectbox(
                 "Number of Major Vessels",
-                [
-                    "0 (0 major vessels)",
-                    "1 (1 major vessel)",
-                    "2 (2 major vessels)",
-                    "3 (3 major vessels)",
-                ],
+                ["0", "1", "2", "3"],
+                key=form_name + "_vessels"
             )
 
         submitted = st.form_submit_button(
-            "🔍 Predict Heart Disease", use_container_width=True
+            button_text,
+            use_container_width=True
         )
 
-    if submitted:
-        values = [
-            int(age),
-            0 if gender_label.startswith("Female") else 1,
-            int(chest_label.split()[0]),
-            int(resting_bp),
-            int(cholesterol),
-            int(fasting_label.split()[0]),
-            int(ecg_label.split()[0]),
-            int(max_heart_rate),
-            int(angina_label.split()[0]),
-            float(oldpeak),
-            int(slope_label.split()[0]),
-            int(vessels_label.split()[0]),
-        ]
+    if not submitted:
+        return None
+
+    values = [
+        int(age),
+        0 if gender.startswith("Female") else 1,
+        int(chest.split()[0]),
+        int(bp),
+        int(cholesterol),
+        int(fasting.split()[0]),
+        int(ecg.split()[0]),
+        int(maxhr),
+        int(angina.split()[0]),
+        float(oldpeak),
+        int(slope.split()[0]),
+        int(vessels)
+    ]
+
+    return values
+
+
+# ---------------- ADMIN LOGIN ----------------
+
+st.sidebar.title("❤️ HeartCare AI")
+st.sidebar.caption("Heart Health Prediction")
+st.sidebar.divider()
+
+st.sidebar.subheader("Administrator Login")
+
+if not st.session_state.get("admin_id"):
+
+    with st.sidebar.form("login_form"):
+
+        email = st.text_input("Email")
+
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
+
+        login = st.form_submit_button("Login")
+
+    if login:
+
+        try:
+            response = supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": password
+            })
+
+            if response.user and response.session:
+
+                st.session_state["admin_id"] = response.user.id
+
+                st.session_state["access_token"] = (
+                    response.session.access_token
+                )
+
+                st.session_state["refresh_token"] = (
+                    response.session.refresh_token
+                )
+
+                st.rerun()
+
+            else:
+                st.sidebar.error("Login failed.")
+
+        except Exception:
+            st.sidebar.error(
+                "Invalid administrator email or password."
+            )
+
+else:
+
+    st.sidebar.success("Administrator logged in")
+
+    if st.sidebar.button("Logout"):
+
+        try:
+            supabase.auth.sign_out()
+        except Exception:
+            pass
+
+        for key in ["admin_id", "access_token", "refresh_token"]:
+            st.session_state.pop(key, None)
+
+        st.rerun()
+
+
+# ---------------- NAVIGATION ----------------
+
+public_pages = [
+    "Home",
+    "Predictor",
+    "Understanding Parameters",
+    "Heart Health Tips"
+]
+
+admin_pages = [
+    "Register Patient",
+    "Patient Records",
+    "Update Patient",
+    "Delete Patient"
+]
+
+if st.session_state.get("admin_id"):
+    pages = public_pages + admin_pages
+else:
+    pages = public_pages
+
+page = st.sidebar.radio(
+    "Navigation",
+    pages,
+    key="navigation"
+)
+
+
+# ---------------- HOME ----------------
+
+if page == "Home":
+
+    st.markdown("""
+    <div class="hero">
+        <h1>❤️ HeartCare AI</h1>
+        <h3>Heart Disease Risk Prediction</h3>
+        <p>Machine Learning Based Healthcare Application</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.header("Welcome to HeartCare AI")
+
+    st.write("""
+    HeartCare AI uses a trained Random Forest machine-learning
+    model to predict heart disease from selected health parameters.
+
+    Features include:
+
+    - Heart disease prediction
+    - Administrator authentication
+    - Patient registration
+    - Automatic Patient ID generation
+    - Patient record management
+    - Prediction result storage
+    """)
+
+    st.info(
+        "Public visitors can use the prediction feature. "
+        "Only the administrator can manage saved patient records."
+    )
+
+
+# ---------------- PUBLIC PREDICTOR ----------------
+
+elif page == "Predictor":
+
+    st.markdown(
+        '<p class="main-title">Heart Disease Predictor</p>',
+        unsafe_allow_html=True
+    )
+
+    st.info(
+        "Public predictions are not saved to the patient database."
+    )
+
+    values = health_input_form(
+        "public_prediction",
+        "Predict Heart Disease"
+    )
+
+    if values is not None:
 
         try:
             prediction, probability, input_df = predict_patient(values)
-            show_prediction(prediction, probability, input_df)
-        except Exception as exc:
-            st.error(f"Prediction failed: {exc}")
-            st.info(
-                "Check that the uploaded model was trained with the same 12 "
-                "feature names and order used by this application."
+
+            show_prediction(
+                prediction,
+                probability,
+                input_df
             )
 
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
+
+
+# ---------------- ADMIN SECURITY HELPER ----------------
+
+def require_admin():
+
+    if not st.session_state.get("admin_id"):
+        st.error("Administrator login required.")
+        st.stop()
+
+
+def get_records():
+
+    require_admin()
+
+    response = (
+        supabase.table("patients")
+        .select("*")
+        .eq("created_by", st.session_state["admin_id"])
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return response.data or []
+
+
+# ---------------- REGISTER PATIENT ----------------
+
+elif page == "Register Patient":
+
+    require_admin()
+
+    st.markdown(
+        '<p class="main-title">Register Patient</p>',
+        unsafe_allow_html=True
+    )
+
+    with st.form("patient_details"):
+
+        patient_name = st.text_input("Patient Name")
+
+        contact = st.text_input(
+            "Contact Number (Optional)"
+        )
+
+        consent = st.checkbox(
+            "I confirm that the patient has agreed "
+            "to the collection and storage of these details."
+        )
+
+        details_submit = st.form_submit_button(
+            "Continue"
+        )
+
+    if details_submit:
+
+        if not patient_name.strip():
+            st.error("Enter patient name.")
+
+        elif not consent:
+            st.error("Patient consent is required.")
+
+        else:
+
+            st.session_state["pending_name"] = patient_name.strip()
+            st.session_state["pending_contact"] = contact.strip()
+
+            st.success(
+                "Patient details entered. Complete the health parameters."
+            )
+
+    if st.session_state.get("pending_name"):
+
+        values = health_input_form(
+            "patient_health",
+            "Predict and Save Patient"
+        )
+
+        if values is not None:
+
+            try:
+
+                prediction, probability, input_df = predict_patient(values)
+
+                record = {
+
+                    "patient_name": st.session_state["pending_name"],
+
+                    "contact_number":
+                        st.session_state.get("pending_contact") or None,
+
+                    "age": values[0],
+
+                    "gender":
+                        "Female" if values[1] == 0 else "Male",
+
+                    "chestpain": values[2],
+
+                    "restingbp": values[3],
+
+                    "serumcholestrol": values[4],
+
+                    "fastingbloodsugar": values[5],
+
+                    "restingrelectro": values[6],
+
+                    "maxheartrate": values[7],
+
+                    "exerciseangia": values[8],
+
+                    "oldpeak": values[9],
+
+                    "slope": values[10],
+
+                    "noofmajorvessels": values[11],
+
+                    "prediction": prediction,
+
+                    "prediction_label":
+                        get_prediction_label(prediction),
+
+                    "probability": probability,
+
+                    "prediction_created_at":
+                        pd.Timestamp.now(tz="UTC").isoformat(),
+
+                    "created_by": st.session_state["admin_id"]
+                }
+
+                result = (
+                    supabase.table("patients")
+                    .insert(record)
+                    .execute()
+                )
+
+                if result.data:
+
+                    st.success("Patient registered successfully!")
+
+                    st.subheader("Generated Patient ID")
+
+                    st.code(
+                        result.data[0]["patient_id"]
+                    )
+
+                    show_prediction(
+                        prediction,
+                        probability,
+                        input_df
+                    )
+
+                    for key in ["pending_name", "pending_contact"]:
+                        st.session_state.pop(key, None)
+
+            except Exception as e:
+
+                st.error(f"Patient registration failed: {e}")
+
+
+# ---------------- VIEW PATIENT RECORDS ----------------
+
+elif page == "Patient Records":
+
+    require_admin()
+
+    st.markdown(
+        '<p class="main-title">Patient Records</p>',
+        unsafe_allow_html=True
+    )
+
+    try:
+
+        records = get_records()
+
+        if records:
+
+            df = pd.DataFrame(records)
+
+            columns = [
+                "patient_id",
+                "patient_name",
+                "age",
+                "gender",
+                "contact_number",
+                "prediction_label",
+                "probability",
+                "created_at"
+            ]
+
+            st.dataframe(
+                df[[c for c in columns if c in df.columns]],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.write("Total patients:", len(records))
+
+        else:
+
+            st.info("No patient records available.")
+
+    except Exception as e:
+
+        st.error(f"Unable to load records: {e}")
+
+
+# ---------------- UPDATE PATIENT ----------------
+
+elif page == "Update Patient":
+
+    require_admin()
+
+    st.markdown(
+        '<p class="main-title">Update Patient</p>',
+        unsafe_allow_html=True
+    )
+
+    try:
+
+        records = get_records()
+
+        if records:
+
+            choices = {
+                f"{r['patient_name']} - {r['patient_id']}": r
+                for r in records
+            }
+
+            selected_label = st.selectbox(
+                "Select Patient",
+                list(choices.keys())
+            )
+
+            patient = choices[selected_label]
+
+            with st.form("update_form"):
+
+                new_name = st.text_input(
+                    "Patient Name",
+                    patient["patient_name"]
+                )
+
+                new_age = st.number_input(
+                    "Age",
+                    1,
+                    120,
+                    int(patient["age"])
+                )
+
+                new_gender = st.selectbox(
+                    "Gender",
+                    ["Female", "Male"],
+                    index=(
+                        0 if patient["gender"] == "Female" else 1
+                    )
+                )
+
+                new_contact = st.text_input(
+                    "Contact Number",
+                    patient.get("contact_number") or ""
+                )
+
+                update = st.form_submit_button(
+                    "Update Patient"
+                )
+
+            if update:
+
+                if not new_name.strip():
+                    st.error("Patient name is required.")
+
+                else:
+
+                    (
+                        supabase.table("patients")
+                        .update({
+                            "patient_name": new_name.strip(),
+                            "age": int(new_age),
+                            "gender": new_gender,
+                            "contact_number": new_contact.strip() or None
+                        })
+                        .eq("patient_id", patient["patient_id"])
+                        .eq("created_by", st.session_state["admin_id"])
+                        .execute()
+                    )
+
+                    st.success("Patient updated successfully.")
+
+                    st.rerun()
+
+        else:
+
+            st.info("No patient records available.")
+
+    except Exception as e:
+
+        st.error(f"Update failed: {e}")
+
+
+# ---------------- DELETE PATIENT ----------------
+
+elif page == "Delete Patient":
+
+    require_admin()
+
+    st.markdown(
+        '<p class="main-title">Delete Patient</p>',
+        unsafe_allow_html=True
+    )
+
+    try:
+
+        records = get_records()
+
+        if records:
+
+            choices = {
+                f"{r['patient_name']} - {r['patient_id']}": r
+                for r in records
+            }
+
+            selected_label = st.selectbox(
+                "Select Patient",
+                list(choices.keys())
+            )
+
+            patient = choices[selected_label]
+
+            confirm = st.checkbox(
+                "I confirm that I want to permanently delete this record."
+            )
+
+            if st.button(
+                "Delete Patient",
+                disabled=not confirm
+            ):
+
+                (
+                    supabase.table("patients")
+                    .delete()
+                    .eq("patient_id", patient["patient_id"])
+                    .eq("created_by", st.session_state["admin_id"])
+                    .execute()
+                )
+
+                st.success("Patient deleted successfully.")
+
+                st.rerun()
+
+        else:
+
+            st.info("No patient records available.")
+
+    except Exception as e:
+
+        st.error(f"Delete failed: {e}")
+
+
 # ---------------- UNDERSTANDING PARAMETERS ----------------
-elif page == "Understanding Health Parameters":
+
+elif page == "Understanding Parameters":
+
     st.markdown(
         '<p class="main-title">Understanding Health Parameters</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="subtitle">The 12 input features used by the prediction model.</p>',
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
-    items = [
-        ("1. Age", "Patient age in years.", "Enter age in years."),
-        ("2. Gender", "Gender value recorded by the dataset.", "0 = Female; 1 = Male."),
-        ("3. Chest Pain Type", "Chest-pain category recorded for the patient.",
-         "0 = Typical angina; 1 = Atypical angina; 2 = Non-anginal pain; 3 = Asymptomatic."),
-        ("4. Resting Blood Pressure", "Blood pressure recorded at rest, in mmHg.",
-         "Use a measurement from a medical report. Demo input range: 94–200."),
-        ("5. Serum Cholesterol", "Blood cholesterol measurement, usually mg/dL.",
-         "Use a laboratory report. Demo input range: 126–602."),
-        ("6. Fasting Blood Sugar", "Fasting blood sugar category used by the dataset.",
-         "0 = ≤120 mg/dL; 1 = >120 mg/dL."),
-        ("7. Resting ECG", "ECG records the heart's electrical activity at rest.",
-         "0 = Normal; 1 = ST-T wave abnormality; 2 = Possible/definite LVH."),
-        ("8. Maximum Heart Rate", "Maximum heart rate recorded during the relevant test, in bpm.",
-         "Demo input range: 71–202."),
-        ("9. Exercise-Induced Angina", "Indicates whether angina was recorded during exercise.",
-         "0 = No; 1 = Yes."),
-        ("10. Oldpeak", "ST-segment depression value recorded in an exercise test.",
-         "Use the value from the relevant test report. Demo input range: 0–6.2."),
-        ("11. Slope", "Slope of the peak exercise ST segment.",
-         "0 = Unspecified dataset category; 1 = Upsloping; 2 = Flat; 3 = Downsloping."),
-        ("12. Number of Major Vessels", "Number of major vessels recorded in the dataset.",
-         "0, 1, 2, or 3; use the medical report."),
-    ]
-
-    for title, meaning, values in items:
-        with st.expander(title):
-            st.write("**Meaning:**", meaning)
-            st.write("**Dataset coding / demo range:**", values)
-
-    st.info(
-        "The displayed category descriptions are provided for project explanation. "
-        "Do not guess ECG, Oldpeak, or major-vessel values."
-    )
-
-# ---------------- HEART HEALTH TIPS ----------------
-elif page == "Heart Health Tips":
-    st.markdown(
-        '<p class="main-title">Heart Health Tips ❤️</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="subtitle">General educational information.</p>',
-        unsafe_allow_html=True,
-    )
-
-    left, right = st.columns(2)
-    with left:
-        st.image(
-            "https://images.unsplash.com/photo-1490645935967-10de6ba17061?w=900",
-            caption="Balanced food choices",
-            use_container_width=True,
-        )
-        st.markdown("### 🥗 Eat a Balanced Diet")
-        st.write(
-            "Include fruits, vegetables, whole grains and balanced meals. "
-            "Limit excess salt and highly processed foods."
-        )
-        st.markdown("### 🚶 Stay Physically Active")
-        st.write("Choose regular physical activity suitable for your health.")
-        st.markdown("### 🚭 Avoid Smoking")
-        st.write("Avoid tobacco and seek professional support to stop smoking.")
-
-    with right:
-        st.image(
-            "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=900",
-            caption="Healthy lifestyle",
-            use_container_width=True,
-        )
-        st.markdown("### 😴 Get Enough Sleep")
-        st.write("Maintain a regular sleep schedule and get enough rest.")
-        st.markdown("### 🩺 Monitor Your Health")
-        st.write(
-            "Check blood pressure, blood sugar and cholesterol as advised "
-            "by your healthcare professional."
-        )
-        st.markdown("### 🧘 Manage Stress")
-        st.write("Relaxation and healthy routines can help manage everyday stress.")
-
-    st.warning(
-        "For chest pain, severe breathlessness, fainting or other emergency "
-        "symptoms, seek urgent medical care."
-    )
-
-# ---------------- FOOTER ----------------
-st.markdown(
-    """
-    <div class="footer">
-      <hr><b>HeartCare AI | Academic Demonstration</b><br>
-      No patient information is stored by this application.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    parameters = {
+        "Age": "Patient age in years.",
+        "Gender": "0 = Female; 1 = Male.",
+        "Chest Pain Type": "0 = Typical; 1 = Atypical; 2 = Non-anginal; 3 = Asymptomatic.",
+        "Resting BP": "Blood pressure at rest.",
+        "Serum Cholesterol": "Blood cholesterol measurement.",
+        "Fasting Blood Sugar": "0 = ≤120 mg/dL; 1 = >120 mg/dL.",
+        "Resting ECG": "ECG measurement at rest.",
+        "Maximum Heart Rate": "Maximum heart rate recorded during the test.",
+        "Exercise-Induced Angina": "0 = No; 1 = Yes.",
+        "Oldpeak": "ST-segment depression va
