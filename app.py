@@ -372,6 +372,30 @@ else:
             st.session_state.pop(key, None)
 
         st.rerun()
+        # ---------------- ADMIN SECURITY HELPER ----------------
+
+def require_admin():
+
+    if not st.session_state.get("admin_id"):
+        st.error("Administrator login required.")
+        st.stop()
+
+
+def get_records():
+
+    require_admin()
+
+    response = (
+        supabase.table("patients")
+        .select("*")
+        .eq("created_by", st.session_state["admin_id"])
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return response.data or []
+
+
 
 
 # ---------------- NAVIGATION ----------------
@@ -468,29 +492,6 @@ elif page == "Predictor":
         except Exception as e:
             st.error(f"Prediction failed: {e}")
 
-
-# ---------------- ADMIN SECURITY HELPER ----------------
-
-def require_admin():
-
-    if not st.session_state.get("admin_id"):
-        st.error("Administrator login required.")
-        st.stop()
-
-
-def get_records():
-
-    require_admin()
-
-    response = (
-        supabase.table("patients")
-        .select("*")
-        .eq("created_by", st.session_state["admin_id"])
-        .order("created_at", desc=True)
-        .execute()
-    )
-
-    return response.data or []
 
 
 # ---------------- REGISTER PATIENT ----------------
